@@ -30,6 +30,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +53,16 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/images/home_hub/
+    - assets/images/plaza/
+    - assets/images/learn/
+    - assets/images/learn/posts/
+    - assets/images/efficiency/
+    - assets/images/efficiency/posts/
+    - assets/images/my_sop/
+    - assets/images/run/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

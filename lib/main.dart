@@ -3,6 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'app_controller.dart';
+import 'app_shell.dart';
+import 'models/sop.dart';
+import 'theme/app_theme.dart' show AppColors, AssetBlendCard;
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(
@@ -26,6 +31,20 @@ const _honey = Color(0xFFFFD76D);
 const _brown = Color(0xFF453528);
 const _softBrown = Color(0xFF806B58);
 const _line = Color(0xFFEEDCB7);
+const _headerBg = Color(0xFFF5EED8);
+const _cardBorder = Color(0xFFD8C7A8);
+const _mySopHero = 'assets/images/my_sop/hero_my_sop.png';
+const _runStepHero = 'assets/images/run/hero_run_step.png';
+const _runCompleteImage = 'assets/images/run/state_complete.png';
+const _sopThumbPersonal = 'assets/images/plaza/category_personal.png';
+const _sopThumbTeam = 'assets/images/plaza/category_team.png';
+const _sopThumbFactory = 'assets/images/plaza/category_factory.png';
+
+String _sopThumbFor(int variant) => switch (variant % 3) {
+      1 => _sopThumbTeam,
+      2 => _sopThumbFactory,
+      _ => _sopThumbPersonal,
+    };
 
 class SopIslandApp extends StatelessWidget {
   const SopIslandApp({super.key});
@@ -49,142 +68,72 @@ class SopIslandApp extends StatelessWidget {
           foregroundColor: _brown,
         ),
       ),
-      home: const SopHomePage(),
+      home: AppShell(
+        mySopBuilder: (controller, pendingRunSopId, onPendingRunHandled) => SopHomePage(
+          controller: controller,
+          pendingRunSopId: pendingRunSopId,
+          onPendingRunHandled: onPendingRunHandled,
+        ),
+      ),
     );
   }
 }
 
-class Sop {
-  Sop({
-    required this.id,
-    required this.title,
-    required this.scene,
-    required this.steps,
-    this.runCount = 0,
-    this.lastRunAt,
-  });
-
-  final String id;
-  String title;
-  String scene;
-  List<SopStep> steps;
-  int runCount;
-  DateTime? lastRunAt;
-
-  int get subStepCount => steps.fold(0, (sum, step) => sum + step.items.length);
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'scene': scene,
-        'runCount': runCount,
-        'lastRunAt': lastRunAt?.toIso8601String(),
-        'steps': steps.map((e) => e.toJson()).toList(),
-      };
-
-  factory Sop.fromJson(Map<String, dynamic> json) => Sop(
-        id: json['id'] as String,
-        title: json['title'] as String? ?? '',
-        scene: json['scene'] as String? ?? '',
-        runCount: json['runCount'] as int? ?? 0,
-        lastRunAt: json['lastRunAt'] == null ? null : DateTime.tryParse(json['lastRunAt']),
-        steps: ((json['steps'] as List?) ?? const [])
-            .map((e) => SopStep.fromJson(Map<String, dynamic>.from(e as Map)))
-            .toList(),
-      );
-}
-
-class SopStep {
-  SopStep({required this.title, required this.items});
-
-  String title;
-  List<String> items;
-
-  Map<String, dynamic> toJson() => {
-        'title': title,
-        'items': items,
-      };
-
-  factory SopStep.fromJson(Map<String, dynamic> json) => SopStep(
-        title: json['title'] as String? ?? '',
-        items: ((json['items'] as List?) ?? const []).map((e) => '$e').toList(),
-      );
-}
-
-class SopStore {
-  List<Sop>? _cache;
-
-  Future<List<Sop>> load() async {
-    _cache ??= _seedSops();
-    return _cache!.map((sop) => Sop.fromJson(sop.toJson())).toList();
-  }
-
-  Future<void> save(List<Sop> sops) async {
-    _cache = sops.map((sop) => Sop.fromJson(sop.toJson())).toList();
-  }
-}
-
-List<Sop> _seedSops() => [
-      Sop(
-        id: 'seed-morning',
-        title: '门店开店检查',
-        scene: '每日营业前',
-        runCount: 3,
-        lastRunAt: DateTime.now().subtract(const Duration(hours: 22)),
-        steps: [
-          SopStep(title: '环境准备', items: ['打开照明和空调', '检查入口地面', '确认背景音乐音量']),
-          SopStep(title: '设备检查', items: ['启动收银设备', '检查打印纸余量', '完成网络测试']),
-          SopStep(title: '人员确认', items: ['同步今日重点', '确认岗位分工']),
-        ],
-      ),
-      Sop(
-        id: 'seed-onboard',
-        title: '新人入职接待',
-        scene: '员工首日到岗',
-        runCount: 1,
-        lastRunAt: DateTime.now().subtract(const Duration(days: 5)),
-        steps: [
-          SopStep(title: '资料确认', items: ['核对身份证件', '确认合同签署', '录入紧急联系人']),
-          SopStep(title: '工作准备', items: ['发放工牌', '配置账号', '介绍办公区域']),
-        ],
-      ),
-    ];
-
 enum _Mode { list, detail, edit, run }
 
 class SopHomePage extends StatefulWidget {
-  const SopHomePage({super.key});
+  const SopHomePage({
+    super.key,
+    required this.controller,
+    this.pendingRunSopId,
+    this.onPendingRunHandled,
+  });
+
+  final AppController controller;
+  final String? pendingRunSopId;
+  final VoidCallback? onPendingRunHandled;
 
   @override
   State<SopHomePage> createState() => _SopHomePageState();
 }
 
 class _SopHomePageState extends State<SopHomePage> {
-  final _store = SopStore();
   var _mode = _Mode.list;
-  var _loading = true;
-  List<Sop> _sops = [];
   Sop? _active;
   int _runIndex = 0;
   final Map<int, Set<int>> _checked = {};
 
+  List<Sop> get _sops => widget.controller.sops;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handlePendingRun());
   }
 
-  Future<void> _load() async {
-    final sops = await _store.load();
-    if (!mounted) return;
-    setState(() {
-      _sops = sops;
-      _loading = false;
-    });
-    await _store.save(sops);
+  @override
+  void didUpdateWidget(SopHomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _handlePendingRun();
   }
 
-  Future<void> _persist() => _store.save(_sops);
+  void _handlePendingRun() {
+    final id = widget.pendingRunSopId;
+    if (id == null || widget.controller.loading) return;
+    Sop? sop;
+    for (final s in _sops) {
+      if (s.id == id) {
+        sop = s;
+        break;
+      }
+    }
+    if (sop != null) {
+      _startRun(sop);
+      widget.onPendingRunHandled?.call();
+    }
+  }
+
+  Future<void> _persist() => widget.controller.save();
 
   void _open(Sop sop) => setState(() {
         _active = sop;
@@ -196,6 +145,8 @@ class _SopHomePageState extends State<SopHomePage> {
           id: DateTime.now().microsecondsSinceEpoch.toString(),
           title: '',
           scene: '',
+          description: '',
+          illustration: _sops.length % 3,
           steps: [SopStep(title: '第一步', items: ['确认事项'])],
         );
         _mode = _Mode.edit;
@@ -272,60 +223,54 @@ class _SopHomePageState extends State<SopHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        const _IslandBackdrop(),
-        SafeArea(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator(color: _deepMint))
-              : AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  child: switch (_mode) {
-                    _Mode.list => _ListScreen(
-                        key: const ValueKey('list'),
-                        sops: _sops,
-                        onOpen: _open,
-                        onRun: _startRun,
-                        onNew: _newSop,
-                      ),
-                    _Mode.detail => _DetailScreen(
-                        key: ValueKey('detail-${_active?.id}'),
-                        sop: _active!,
-                        onBack: () => setState(() => _mode = _Mode.list),
-                        onRun: () => _startRun(_active!),
-                        onEdit: () => _edit(_active!),
-                        onDelete: () => _confirmDelete(_active!),
-                      ),
-                    _Mode.edit => _EditScreen(
-                        key: ValueKey('edit-${_active?.id}'),
-                        sop: _active!,
-                        onCancel: () => setState(() => _mode = _active!.title.isEmpty ? _Mode.list : _Mode.detail),
-                        onSave: _saveEdit,
-                      ),
-                    _Mode.run => _RunScreen(
-                        key: ValueKey('run-${_active?.id}'),
-                        sop: _active!,
-                        index: _runIndex,
-                        checked: _checked,
-                        onBack: () => setState(() => _mode = _Mode.detail),
-                        onPrev: () => setState(() => _runIndex = (_runIndex - 1).clamp(0, _active!.steps.length - 1)),
-                        onNext: () {
-                          if (_runIndex == _active!.steps.length - 1) {
-                            _finishRun();
-                          } else {
-                            setState(() => _runIndex++);
-                          }
-                        },
-                        onToggle: (itemIndex, value) => setState(() {
-                          final set = _checked.putIfAbsent(_runIndex, () => <int>{});
-                          value ? set.add(itemIndex) : set.remove(itemIndex);
-                        }),
-                        onJump: (target) => setState(() => _runIndex = target),
-                      ),
-                  },
-                ),
-        ),
-      ],
+    if (widget.controller.loading) {
+      return const Center(child: CircularProgressIndicator(color: _deepMint));
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: switch (_mode) {
+        _Mode.list => _ListScreen(
+            key: const ValueKey('list'),
+            sops: _sops,
+            onOpen: _open,
+            onRun: _startRun,
+            onNew: _newSop,
+          ),
+        _Mode.detail => _DetailScreen(
+            key: ValueKey('detail-${_active?.id}'),
+            sop: _active!,
+            onBack: () => setState(() => _mode = _Mode.list),
+            onRun: () => _startRun(_active!),
+            onEdit: () => _edit(_active!),
+            onDelete: () => _confirmDelete(_active!),
+          ),
+        _Mode.edit => _EditScreen(
+            key: ValueKey('edit-${_active?.id}'),
+            sop: _active!,
+            onCancel: () => setState(() => _mode = _active!.title.isEmpty ? _Mode.list : _Mode.detail),
+            onSave: _saveEdit,
+          ),
+        _Mode.run => _RunScreen(
+            key: ValueKey('run-${_active?.id}'),
+            sop: _active!,
+            index: _runIndex,
+            checked: _checked,
+            onBack: () => setState(() => _mode = _Mode.detail),
+            onPrev: () => setState(() => _runIndex = (_runIndex - 1).clamp(0, _active!.steps.length - 1)),
+            onNext: () {
+              if (_runIndex == _active!.steps.length - 1) {
+                _finishRun();
+              } else {
+                setState(() => _runIndex++);
+              }
+            },
+            onToggle: (itemIndex, value) => setState(() {
+              final set = _checked.putIfAbsent(_runIndex, () => <int>{});
+              value ? set.add(itemIndex) : set.remove(itemIndex);
+            }),
+            onJump: (target) => setState(() => _runIndex = target),
+          ),
+      },
     );
   }
 
@@ -362,76 +307,65 @@ class _ListScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 8, right: 4),
+        child: _NewSopFab(onTap: onNew),
+      ),
       body: CustomScrollView(
         slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 12, 22, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'SOP Island',
-                          style: TextStyle(color: _brown, fontSize: 32, fontWeight: FontWeight.w900),
-                        ),
-                      ),
-                      _RoundIconButton(icon: Icons.add_rounded, color: _coral, onTap: onNew),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  const Text('把重复工作做成清晰路线', style: TextStyle(color: _softBrown, fontSize: 15)),
-                  const SizedBox(height: 18),
-                  _HeroPanel(total: sops.length, runs: sops.fold(0, (sum, e) => sum + e.runCount)),
-                ],
+          const SliverToBoxAdapter(child: _ListHeader()),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 6, 18, 88),
+            sliver: SliverList.separated(
+              itemCount: sops.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 12),
+              itemBuilder: (context, index) => _SopCard(
+                sop: sops[index],
+                onOpen: () => onOpen(sops[index]),
+                onRun: () => onRun(sops[index]),
               ),
             ),
           ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
-            sliver: SliverList.separated(
-              itemCount: sops.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 14),
-              itemBuilder: (context, index) => _SopCard(sop: sops[index], onOpen: () => onOpen(sops[index]), onRun: () => onRun(sops[index])),
-            ),
-          ),
         ],
       ),
     );
   }
 }
 
-class _HeroPanel extends StatelessWidget {
-  const _HeroPanel({required this.total, required this.runs});
-
-  final int total;
-  final int runs;
+class _ListHeader extends StatelessWidget {
+  const _ListHeader();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: _softBox(_sky),
-      child: Row(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 16),
+      child: Stack(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('今日工作小岛', style: TextStyle(color: _brown, fontSize: 20, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 8),
-                Text('$total 个 SOP 已就绪，累计完成 $runs 次', style: const TextStyle(color: _softBrown, height: 1.35)),
-              ],
+          const AssetBlendCard(
+            image: _mySopHero,
+            title: '我的 SOP',
+            subtitle: '整理自己的流程库，随时挑一条开始执行。',
+            tint: AppColors.mint,
+            height: 132,
+            titleSize: 24,
+          ),
+          Positioned(
+            top: 14,
+            right: 14,
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(color: _paper.withValues(alpha: 0.86), shape: BoxShape.circle, border: Border.all(color: _line)),
+              child: const Icon(Icons.search_rounded, color: _softBrown, size: 22),
             ),
           ),
-          const _IslandMark(size: 82),
         ],
       ),
     );
   }
 }
+
+const _cardArtSize = 86.0;
 
 class _SopCard extends StatelessWidget {
   const _SopCard({required this.sop, required this.onOpen, required this.onRun});
@@ -442,47 +376,225 @@ class _SopCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(26),
-      onTap: onOpen,
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: _softBox(_paper),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: const BoxDecoration(color: _mint, shape: BoxShape.circle),
-                  child: const Icon(Icons.route_rounded, color: _brown),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
+    final desc = sop.description.trim().isEmpty ? sop.scene : sop.description;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onOpen,
+        child: Ink(
+          decoration: _cardDecoration(_paper),
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _SopAssetThumb(image: _sopThumbFor(sop.illustration), size: _cardArtSize),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: _cardArtSize,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(sop.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _brown, fontSize: 18, fontWeight: FontWeight.w900)),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              sop.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _brown, fontSize: 16, fontWeight: FontWeight.w900, height: 1.15),
+                            ),
+                          ),
+                          if (sop.fromPlaza) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _sky.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text('广场', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: _brown)),
+                            ),
+                          ],
+                          const SizedBox(width: 6),
+                          _StepBadge(count: sop.steps.length),
+                        ],
+                      ),
                       const SizedBox(height: 3),
-                      Text(sop.scene, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _softBrown)),
+                      Expanded(
+                        child: Text(
+                          desc,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _softBrown, fontSize: 11.5, height: 1.25, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _MetaLine(icon: Icons.pets_rounded, iconColor: _deepMint, label: '执行 ${sop.runCount} 次', compact: true),
+                                const SizedBox(height: 1),
+                                _MetaLine(icon: Icons.schedule_rounded, iconColor: const Color(0xFF6BAED6), label: '上次 ${_formatLastRun(sop.lastRunAt)}', compact: true),
+                              ],
+                            ),
+                          ),
+                          _RunButton(onTap: onRun, compact: true),
+                        ],
+                      ),
                     ],
                   ),
                 ),
-                _RoundIconButton(icon: Icons.play_arrow_rounded, color: _honey, onTap: onRun),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                _Chip(icon: Icons.check_circle_outline_rounded, label: '${sop.runCount} 次完成'),
-                const SizedBox(width: 8),
-                _Chip(icon: Icons.schedule_rounded, label: _formatTime(sop.lastRunAt)),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _StepBadge extends StatelessWidget {
+  const _StepBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF2D4A6),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _line, width: 1),
+      ),
+      child: Text('步骤 $count', style: const TextStyle(color: _brown, fontSize: 10.5, fontWeight: FontWeight.w800, height: 1.1)),
+    );
+  }
+}
+
+class _MetaLine extends StatelessWidget {
+  const _MetaLine({required this.icon, required this.iconColor, required this.label, this.compact = false});
+
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: compact ? 13 : 16, color: iconColor),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: _softBrown, fontSize: compact ? 11 : 13, fontWeight: FontWeight.w600, height: 1.1),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RunButton extends StatelessWidget {
+  const _RunButton({required this.onTap, this.compact = false});
+
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFC8EBD4),
+      borderRadius: BorderRadius.circular(compact ? 12 : 14),
+      elevation: compact ? 1 : 0,
+      shadowColor: const Color(0x33000000),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(compact ? 12 : 14),
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 14, vertical: compact ? 5 : 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: compact ? 18 : 22,
+                height: compact ? 18 : 22,
+                decoration: const BoxDecoration(color: _deepMint, shape: BoxShape.circle),
+                child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: compact ? 13 : 16),
+              ),
+              const SizedBox(width: 4),
+              Text('运行', style: TextStyle(color: _brown, fontWeight: FontWeight.w900, fontSize: compact ? 12 : 14, height: 1)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NewSopFab extends StatelessWidget {
+  const _NewSopFab({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 6,
+      shadowColor: _coral.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(999),
+      color: _coral,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.add_rounded, color: Colors.white, size: 22),
+              const SizedBox(width: 6),
+              const Text('新建', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900)),
+              const SizedBox(width: 4),
+              Icon(Icons.eco_rounded, size: 16, color: Colors.white.withValues(alpha: 0.85)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SopAssetThumb extends StatelessWidget {
+  const _SopAssetThumb({required this.image, this.size = _cardArtSize});
+
+  final String image;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _line, width: 1.2),
+        boxShadow: const [BoxShadow(color: Color(0x10000000), offset: Offset(0, 2), blurRadius: 0)],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Image.asset(image, fit: BoxFit.cover),
       ),
     );
   }
@@ -513,7 +625,10 @@ class _DetailScreen extends StatelessWidget {
         children: [
           Text(sop.title, style: const TextStyle(color: _brown, fontSize: 30, fontWeight: FontWeight.w900)),
           const SizedBox(height: 8),
-          Text(sop.scene, style: const TextStyle(color: _softBrown, fontSize: 16)),
+          if (sop.description.trim().isNotEmpty)
+            Text(sop.description, style: const TextStyle(color: _softBrown, fontSize: 16, height: 1.4))
+          else
+            Text(sop.scene, style: const TextStyle(color: _softBrown, fontSize: 16)),
           const SizedBox(height: 18),
           _StatsRow(sop: sop),
           const SizedBox(height: 18),
@@ -592,6 +707,7 @@ class _EditScreen extends StatefulWidget {
 class _EditScreenState extends State<_EditScreen> {
   late final TextEditingController _title;
   late final TextEditingController _scene;
+  late final TextEditingController _description;
   late final Sop _draft;
 
   @override
@@ -600,18 +716,21 @@ class _EditScreenState extends State<_EditScreen> {
     _draft = widget.sop;
     _title = TextEditingController(text: _draft.title);
     _scene = TextEditingController(text: _draft.scene);
+    _description = TextEditingController(text: _draft.description);
   }
 
   @override
   void dispose() {
     _title.dispose();
     _scene.dispose();
+    _description.dispose();
     super.dispose();
   }
 
   void _save() {
     _draft.title = _title.text.trim().isEmpty ? '未命名 SOP' : _title.text.trim();
     _draft.scene = _scene.text.trim().isEmpty ? '未设置场景' : _scene.text.trim();
+    _draft.description = _description.text.trim();
     _draft.steps = _draft.steps.where((s) => s.title.trim().isNotEmpty || s.items.any((e) => e.trim().isNotEmpty)).toList();
     for (final step in _draft.steps) {
       step.title = step.title.trim().isEmpty ? '未命名步骤' : step.title.trim();
@@ -637,6 +756,8 @@ class _EditScreenState extends State<_EditScreen> {
           _TextBox(controller: _title, label: 'SOP 名称'),
           const SizedBox(height: 12),
           _TextBox(controller: _scene, label: '适用场景'),
+          const SizedBox(height: 12),
+          _TextBox(controller: _description, label: '描述说明'),
           const SizedBox(height: 18),
           ...List.generate(_draft.steps.length, (stepIndex) => _EditableStep(
                 step: _draft.steps[stepIndex],
@@ -771,16 +892,22 @@ class _RunScreen extends StatelessWidget {
         children: [
           LinearProgressIndicator(value: progress, color: _deepMint, backgroundColor: _paper, minHeight: 10, borderRadius: BorderRadius.circular(8)),
           const SizedBox(height: 18),
+          AssetBlendCard(
+            image: _runStepHero,
+            title: step.title,
+            subtitle: '${sop.title} · 第 ${index + 1} 步 / 共 ${sop.steps.length} 步',
+            tint: AppColors.mint,
+            height: 142,
+            titleSize: 21,
+            subtitleWidth: 230,
+          ),
+          const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.all(22),
             decoration: _softBox(_mint),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(sop.title, style: const TextStyle(color: _brown, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 10),
-                Text(step.title, style: const TextStyle(color: _brown, fontSize: 28, fontWeight: FontWeight.w900, height: 1.15)),
-                const SizedBox(height: 18),
                 ...List.generate(step.items.length, (i) {
                   final isDone = done.contains(i);
                   return Container(
@@ -865,7 +992,17 @@ class _BackdropPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..style = PaintingStyle.fill;
-    paint.color = _sky.withValues(alpha: 0.38);
+    paint.color = _cream;
+    canvas.drawRect(Offset.zero & size, paint);
+
+    for (var i = 0; i < 8; i++) {
+      final x = size.width * (0.08 + (i * 0.11) % 0.84);
+      final y = size.height * (0.06 + (i * 0.13) % 0.82);
+      _drawStar(canvas, Offset(x, y), 5 + (i % 3), _honey.withValues(alpha: 0.55));
+      if (i.isEven) _drawLeaf(canvas, Offset(x + 18, y + 12), _deepMint.withValues(alpha: 0.35));
+    }
+
+    paint.color = _sky.withValues(alpha: 0.28);
     canvas.drawCircle(Offset(size.width * 0.86, size.height * 0.08), 72, paint);
     paint.color = _mint.withValues(alpha: 0.32);
     canvas.drawCircle(Offset(size.width * 0.05, size.height * 0.22), 54, paint);
@@ -877,47 +1014,90 @@ class _BackdropPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-class _IslandMark extends StatelessWidget {
-  const _IslandMark({required this.size});
-
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: CustomPaint(painter: _IslandMarkPainter()),
-    );
+void _drawStar(Canvas canvas, Offset center, double radius, Color color) {
+  final paint = Paint()..color = color..style = PaintingStyle.fill;
+  final path = Path();
+  for (var i = 0; i < 4; i++) {
+    final angle = i * math.pi / 2;
+    path.moveTo(center.dx, center.dy);
+    path.lineTo(center.dx + math.cos(angle) * radius, center.dy + math.sin(angle) * radius);
+    path.lineTo(center.dx + math.cos(angle + 0.35) * radius * 0.35, center.dy + math.sin(angle + 0.35) * radius * 0.35);
+    path.close();
   }
+  canvas.drawPath(path, paint);
 }
 
-class _IslandMarkPainter extends CustomPainter {
+void _drawLeaf(Canvas canvas, Offset center, Color color) {
+  final paint = Paint()..color = color;
+  canvas.drawOval(Rect.fromCenter(center: center, width: 10, height: 6), paint);
+}
+
+class _IllustrationPainter extends CustomPainter {
+  _IllustrationPainter({required this.variant});
+
+  final int variant;
+
   @override
   void paint(Canvas canvas, Size size) {
+    switch (variant) {
+      case 1:
+        _paintBoard(canvas, size);
+      case 2:
+        _paintLighthouse(canvas, size);
+      default:
+        _paintCottage(canvas, size);
+    }
+  }
+
+  void _paintCottage(Canvas canvas, Size size) {
     final paint = Paint()..style = PaintingStyle.fill;
-    paint.color = _honey;
-    canvas.drawOval(Rect.fromLTWH(size.width * .08, size.height * .62, size.width * .84, size.height * .25), paint);
+    paint.color = const Color(0xFFBFE5F5);
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
     paint.color = _mint;
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * .18, size.height * .40, size.width * .64, size.height * .28), const Radius.circular(18)), paint);
+    canvas.drawRect(Rect.fromLTWH(0, size.height * 0.62, size.width, size.height * 0.38), paint);
+    paint.color = const Color(0xFF8B5E3C);
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.28, size.height * 0.38, size.width * 0.44, size.height * 0.34), paint);
     paint.color = _coral;
-    canvas.drawCircle(Offset(size.width * .64, size.height * .34), size.width * .16, paint);
-    paint.color = _brown;
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * .48, size.height * .28, 6, size.height * .43), const Radius.circular(4)), paint);
-    paint.color = _paper;
-    final path = Path()
-      ..moveTo(size.width * .30, size.height * .53)
-      ..lineTo(size.width * .43, size.height * .64)
-      ..lineTo(size.width * .70, size.height * .44)
-      ..lineTo(size.width * .74, size.height * .50)
-      ..lineTo(size.width * .43, size.height * .72)
-      ..lineTo(size.width * .26, size.height * .58)
+    final roof = Path()
+      ..moveTo(size.width * 0.22, size.height * 0.40)
+      ..lineTo(size.width * 0.50, size.height * 0.18)
+      ..lineTo(size.width * 0.78, size.height * 0.40)
       ..close();
-    canvas.drawPath(path, paint);
+    canvas.drawPath(roof, paint);
+    paint.color = _sky;
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.42, size.height * 0.50, size.width * 0.16, size.height * 0.14), paint);
+  }
+
+  void _paintBoard(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    paint.color = _cream;
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
+    paint.color = const Color(0xFF9B6B43);
+    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.18, size.height * 0.12, size.width * 0.64, size.height * 0.76), const Radius.circular(6)), paint);
+    paint.color = _paper;
+    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.24, size.height * 0.18, size.width * 0.52, size.height * 0.46), const Radius.circular(4)), paint);
+    paint.color = _sky;
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.30, size.height * 0.24, size.width * 0.40, size.height * 0.18), paint);
+    paint.color = _mint;
+    canvas.drawCircle(Offset(size.width * 0.72, size.height * 0.72), size.width * 0.08, paint);
+  }
+
+  void _paintLighthouse(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    paint.color = _sky;
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height * 0.55), paint);
+    paint.color = const Color(0xFF7EC0E8);
+    canvas.drawRect(Rect.fromLTWH(0, size.height * 0.55, size.width, size.height * 0.45), paint);
+    paint.color = _paper;
+    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.58, size.height * 0.48, size.width * 0.28, size.height * 0.34), const Radius.circular(6)), paint);
+    paint.color = _coral;
+    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.22, size.height * 0.22, size.width * 0.18, size.height * 0.58), const Radius.circular(4)), paint);
+    paint.color = _honey;
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.20, size.height * 0.16, size.width * 0.22, size.height * 0.10), paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _IllustrationPainter oldDelegate) => oldDelegate.variant != variant;
 }
 
 class _CelebrationDialog extends StatefulWidget {
@@ -980,9 +1160,12 @@ class _CelebrationDialogState extends State<_CelebrationDialog> with SingleTicke
                         final pulse = 1 + math.sin(_controller.value * math.pi * 2) * 0.06;
                         return Transform.scale(
                           scale: pulse,
-                          child: Container(
-                            decoration: const BoxDecoration(color: _honey, shape: BoxShape.circle),
-                            child: const Icon(Icons.celebration_rounded, color: _brown, size: 58),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(28),
+                            child: Image.asset(
+                              _runCompleteImage,
+                              fit: BoxFit.cover,
+                            ),
                           ),
                         );
                       },
@@ -1166,53 +1349,6 @@ class _SecondaryButton extends StatelessWidget {
   }
 }
 
-class _RoundIconButton extends StatelessWidget {
-  const _RoundIconButton({required this.icon, required this.color, required this.onTap});
-
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(18), boxShadow: const [BoxShadow(color: Color(0x22000000), offset: Offset(0, 4), blurRadius: 0)]),
-        child: Icon(icon, color: _brown),
-      ),
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Flexible(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(color: _cream, borderRadius: BorderRadius.circular(999), border: Border.all(color: _line)),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: _deepMint),
-            const SizedBox(width: 5),
-            Flexible(child: Text(label, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _softBrown, fontSize: 12, fontWeight: FontWeight.w700))),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _StatBox extends StatelessWidget {
   const _StatBox({required this.label, required this.value});
 
@@ -1243,12 +1379,23 @@ BoxDecoration _softBox(Color color) => BoxDecoration(
       ],
     );
 
-String _formatTime(DateTime? time) {
+BoxDecoration _cardDecoration(Color color) => BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: _cardBorder, width: 1.2),
+      boxShadow: const [
+        BoxShadow(color: Color(0x14000000), offset: Offset(0, 3), blurRadius: 6),
+      ],
+    );
+
+String _formatLastRun(DateTime? time) {
   if (time == null) return '未执行';
   final now = DateTime.now();
-  final diff = now.difference(time);
-  if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
-  if (diff.inHours < 24) return '${diff.inHours} 小时前';
-  if (diff.inDays < 7) return '${diff.inDays} 天前';
-  return '${time.month}/${time.day}';
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(time.year, time.month, time.day);
+  final hm = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  if (day == today) return '今天 $hm';
+  if (day == today.subtract(const Duration(days: 1))) return '昨天 $hm';
+  if (now.difference(time).inDays < 7) return '${now.difference(time).inDays} 天前';
+  return '${time.month}/${time.day} $hm';
 }
