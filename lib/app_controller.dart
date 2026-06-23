@@ -1,16 +1,34 @@
 import 'package:flutter/foundation.dart';
 
-import '../models/sop.dart';
+import 'models/ai_config.dart';
+import 'models/sop.dart';
+import 'models/sop_backup.dart';
+
+enum BackupImportMode { merge, replace }
+
+class BackupImportResult {
+  const BackupImportResult({
+    required this.importedCount,
+    required this.totalCount,
+  });
+
+  final int importedCount;
+  final int totalCount;
+}
 
 class AppController extends ChangeNotifier {
   final _store = SopStore();
+  final _aiConfigStore = AiConfigStore();
   List<Sop> sops = [];
+  AiConfig aiConfig = AiConfig.defaults();
   bool loading = true;
 
   Future<void> load() async {
     loading = true;
     notifyListeners();
-    sops = await _store.load();
+    final results = await Future.wait([_store.load(), _aiConfigStore.load()]);
+    sops = results[0] as List<Sop>;
+    aiConfig = results[1] as AiConfig;
     loading = false;
     notifyListeners();
   }
@@ -20,14 +38,45 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Sop> addFromTemplate(SopTemplate template) async {
-    final sop = template.toSop();
-    sops.insert(0, sop);
-    await save();
-    return sop;
+  Future<void> saveAiConfig(AiConfig config) async {
+    aiConfig = config;
+    await _aiConfigStore.save(config);
+    notifyListeners();
   }
 
-  bool hasTemplate(String templateId) => sops.any((s) => s.plazaTemplateId == templateId);
+  Future<void> addSop(Sop sop) async {
+    sops.insert(0, sop);
+    await save();
+  }
+
+  String buildBackupJson() {
+    return SopBackup(
+      exportedAt: DateTime.now(),
+      sops: sops.map((sop) => Sop.fromJson(sop.toJson())).toList(),
+    ).toJsonString();
+  }
+
+  Future<BackupImportResult> importBackupJson(
+    String raw, {
+    required BackupImportMode mode,
+  }) async {
+    final backup = SopBackup.fromJsonString(raw);
+    final imported = backup.sops;
+    if (mode == BackupImportMode.replace) {
+      sops = imported;
+    } else {
+      final importedIds = imported.map((sop) => sop.id).toSet();
+      sops = [
+        ...imported,
+        ...sops.where((sop) => !importedIds.contains(sop.id)),
+      ];
+    }
+    await save();
+    return BackupImportResult(
+      importedCount: imported.length,
+      totalCount: sops.length,
+    );
+  }
 
   /// 今日建议：优先推荐今天未执行或很久未执行的 SOP
   List<Sop> todaySuggestions({int limit = 3}) {
@@ -37,12 +86,17 @@ class AppController extends ChangeNotifier {
 
     int score(Sop sop) {
       if (sop.lastRunAt == null) return 0;
-      final day = DateTime(sop.lastRunAt!.year, sop.lastRunAt!.month, sop.lastRunAt!.day);
+      final day = DateTime(
+        sop.lastRunAt!.year,
+        sop.lastRunAt!.month,
+        sop.lastRunAt!.day,
+      );
       if (day == today) return 1000;
       return sop.lastRunAt!.millisecondsSinceEpoch;
     }
 
-    final sorted = List<Sop>.from(sops)..sort((a, b) => score(a).compareTo(score(b)));
+    final sorted = List<Sop>.from(sops)
+      ..sort((a, b) => score(a).compareTo(score(b)));
     return sorted.take(limit).toList();
   }
 

@@ -11,9 +11,128 @@ class SopStep {
   Map<String, dynamic> toJson() => {'title': title, 'items': items};
 
   factory SopStep.fromJson(Map<String, dynamic> json) => SopStep(
-        title: json['title'] as String? ?? '',
-        items: ((json['items'] as List?) ?? const []).map((e) => '$e').toList(),
-      );
+    title: json['title'] as String? ?? '',
+    items: ((json['items'] as List?) ?? const []).map((e) => '$e').toList(),
+  );
+}
+
+enum SopReminderRepeat {
+  none,
+  daily,
+  weekly,
+  monthly;
+
+  String get label => switch (this) {
+    SopReminderRepeat.none => '不循环',
+    SopReminderRepeat.daily => '每天',
+    SopReminderRepeat.weekly => '每周',
+    SopReminderRepeat.monthly => '每月',
+  };
+
+  String? get rruleFreq => switch (this) {
+    SopReminderRepeat.none => null,
+    SopReminderRepeat.daily => 'DAILY',
+    SopReminderRepeat.weekly => 'WEEKLY',
+    SopReminderRepeat.monthly => 'MONTHLY',
+  };
+
+  static SopReminderRepeat fromName(String? name) {
+    for (final repeat in values) {
+      if (repeat.name == name) return repeat;
+    }
+    return SopReminderRepeat.none;
+  }
+}
+
+class SopReminder {
+  SopReminder({
+    required this.startsAt,
+    this.repeat = SopReminderRepeat.none,
+    this.endsAt,
+    this.alertMinutes = 10,
+  });
+
+  DateTime startsAt;
+  SopReminderRepeat repeat;
+  DateTime? endsAt;
+  int alertMinutes;
+
+  bool get repeats => repeat != SopReminderRepeat.none;
+
+  Map<String, dynamic> toJson() => {
+    'startsAt': startsAt.toIso8601String(),
+    'repeat': repeat.name,
+    'endsAt': endsAt?.toIso8601String(),
+    'alertMinutes': alertMinutes,
+  };
+
+  factory SopReminder.fromJson(Map<String, dynamic> json) => SopReminder(
+    startsAt:
+        DateTime.tryParse(json['startsAt'] as String? ?? '') ?? DateTime.now(),
+    repeat: SopReminderRepeat.fromName(json['repeat'] as String?),
+    endsAt: json['endsAt'] == null
+        ? null
+        : DateTime.tryParse(json['endsAt'] as String),
+    alertMinutes: json['alertMinutes'] as int? ?? 10,
+  );
+}
+
+class SopRunProgress {
+  SopRunProgress({
+    String? id,
+    this.name = '',
+    required this.currentStepIndex,
+    required this.checkedItems,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+       createdAt = createdAt ?? DateTime.now(),
+       updatedAt = updatedAt ?? createdAt ?? DateTime.now();
+
+  String id;
+  String name;
+  int currentStepIndex;
+  Map<int, Set<int>> checkedItems;
+  DateTime createdAt;
+  DateTime updatedAt;
+
+  int get checkedCount =>
+      checkedItems.values.fold(0, (sum, items) => sum + items.length);
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'currentStepIndex': currentStepIndex,
+    'checkedItems': checkedItems.map(
+      (key, value) => MapEntry('$key', value.toList()..sort()),
+    ),
+    'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+  };
+
+  factory SopRunProgress.fromJson(Map<String, dynamic> json) {
+    final rawChecked = Map<String, dynamic>.from(
+      (json['checkedItems'] as Map?) ?? const {},
+    );
+    final updatedAt = DateTime.tryParse(json['updatedAt'] as String? ?? '');
+    final createdAt =
+        DateTime.tryParse(json['createdAt'] as String? ?? '') ?? updatedAt;
+    return SopRunProgress(
+      id: json['id'] as String?,
+      name: json['name'] as String? ?? '',
+      currentStepIndex: json['currentStepIndex'] as int? ?? 0,
+      checkedItems: rawChecked.map(
+        (key, value) => MapEntry(
+          int.tryParse(key) ?? 0,
+          ((value as List?) ?? const [])
+              .map((item) => item is int ? item : (int.tryParse('$item') ?? 0))
+              .toSet(),
+        ),
+      ),
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
+  }
 }
 
 class Sop {
@@ -27,7 +146,13 @@ class Sop {
     this.runCount = 0,
     this.lastRunAt,
     this.plazaTemplateId,
-  });
+    this.pinned = false,
+    this.lastReview = '',
+    this.lastReviewAt,
+    this.reminder,
+    SopRunProgress? runProgress,
+    List<SopRunProgress>? runProgresses,
+  }) : runProgresses = runProgresses ?? _progressListFromNullable(runProgress);
 
   final String id;
   String title;
@@ -38,36 +163,83 @@ class Sop {
   int runCount;
   DateTime? lastRunAt;
   String? plazaTemplateId;
+  bool pinned;
+  String lastReview;
+  DateTime? lastReviewAt;
+  SopReminder? reminder;
+  List<SopRunProgress> runProgresses;
 
   bool get fromPlaza => plazaTemplateId != null;
 
   int get subStepCount => steps.fold(0, (sum, step) => sum + step.items.length);
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'scene': scene,
-        'description': description,
-        'illustration': illustration,
-        'runCount': runCount,
-        'lastRunAt': lastRunAt?.toIso8601String(),
-        'plazaTemplateId': plazaTemplateId,
-        'steps': steps.map((e) => e.toJson()).toList(),
-      };
+  SopRunProgress? get runProgress {
+    if (runProgresses.isEmpty) return null;
+    final sorted = List<SopRunProgress>.from(runProgresses)
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return sorted.first;
+  }
 
-  factory Sop.fromJson(Map<String, dynamic> json) => Sop(
-        id: json['id'] as String,
-        title: json['title'] as String? ?? '',
-        scene: json['scene'] as String? ?? '',
-        description: json['description'] as String? ?? '',
-        illustration: json['illustration'] as int? ?? 0,
-        runCount: json['runCount'] as int? ?? 0,
-        lastRunAt: json['lastRunAt'] == null ? null : DateTime.tryParse(json['lastRunAt'] as String),
-        plazaTemplateId: json['plazaTemplateId'] as String?,
-        steps: ((json['steps'] as List?) ?? const [])
-            .map((e) => SopStep.fromJson(Map<String, dynamic>.from(e as Map)))
-            .toList(),
-      );
+  set runProgress(SopRunProgress? progress) {
+    runProgresses = progress == null ? [] : [progress];
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'scene': scene,
+    'description': description,
+    'illustration': illustration,
+    'runCount': runCount,
+    'lastRunAt': lastRunAt?.toIso8601String(),
+    'plazaTemplateId': plazaTemplateId,
+    'pinned': pinned,
+    'lastReview': lastReview,
+    'lastReviewAt': lastReviewAt?.toIso8601String(),
+    'reminder': reminder?.toJson(),
+    'runProgress': runProgress?.toJson(),
+    'runProgresses': runProgresses.map((e) => e.toJson()).toList(),
+    'steps': steps.map((e) => e.toJson()).toList(),
+  };
+
+  factory Sop.fromJson(Map<String, dynamic> json) {
+    final rawProgresses = (json['runProgresses'] as List?)
+        ?.map(
+          (e) => SopRunProgress.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
+        .toList();
+    final legacyProgress = json['runProgress'] == null
+        ? null
+        : SopRunProgress.fromJson(
+            Map<String, dynamic>.from(json['runProgress'] as Map),
+          );
+    return Sop(
+      id: json['id'] as String,
+      title: json['title'] as String? ?? '',
+      scene: json['scene'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      illustration: json['illustration'] as int? ?? 0,
+      runCount: json['runCount'] as int? ?? 0,
+      lastRunAt: json['lastRunAt'] == null
+          ? null
+          : DateTime.tryParse(json['lastRunAt'] as String),
+      plazaTemplateId: json['plazaTemplateId'] as String?,
+      pinned: json['pinned'] as bool? ?? false,
+      lastReview: json['lastReview'] as String? ?? '',
+      lastReviewAt: json['lastReviewAt'] == null
+          ? null
+          : DateTime.tryParse(json['lastReviewAt'] as String),
+      reminder: json['reminder'] == null
+          ? null
+          : SopReminder.fromJson(
+              Map<String, dynamic>.from(json['reminder'] as Map),
+            ),
+      runProgresses: rawProgresses ?? _progressListFromNullable(legacyProgress),
+      steps: ((json['steps'] as List?) ?? const [])
+          .map((e) => SopStep.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+    );
+  }
 
   Sop copyWith({
     String? id,
@@ -79,19 +251,43 @@ class Sop {
     int? runCount,
     DateTime? lastRunAt,
     String? plazaTemplateId,
-  }) =>
-      Sop(
-        id: id ?? this.id,
-        title: title ?? this.title,
-        scene: scene ?? this.scene,
-        description: description ?? this.description,
-        illustration: illustration ?? this.illustration,
-        steps: steps ?? this.steps.map((s) => SopStep(title: s.title, items: List<String>.from(s.items))).toList(),
-        runCount: runCount ?? this.runCount,
-        lastRunAt: lastRunAt ?? this.lastRunAt,
-        plazaTemplateId: plazaTemplateId ?? this.plazaTemplateId,
-      );
+    bool? pinned,
+    String? lastReview,
+    DateTime? lastReviewAt,
+    SopReminder? reminder,
+    SopRunProgress? runProgress,
+    List<SopRunProgress>? runProgresses,
+  }) => Sop(
+    id: id ?? this.id,
+    title: title ?? this.title,
+    scene: scene ?? this.scene,
+    description: description ?? this.description,
+    illustration: illustration ?? this.illustration,
+    steps:
+        steps ??
+        this.steps
+            .map(
+              (s) => SopStep(title: s.title, items: List<String>.from(s.items)),
+            )
+            .toList(),
+    runCount: runCount ?? this.runCount,
+    lastRunAt: lastRunAt ?? this.lastRunAt,
+    plazaTemplateId: plazaTemplateId ?? this.plazaTemplateId,
+    pinned: pinned ?? this.pinned,
+    lastReview: lastReview ?? this.lastReview,
+    lastReviewAt: lastReviewAt ?? this.lastReviewAt,
+    reminder: reminder ?? this.reminder,
+    runProgress: runProgress,
+    runProgresses:
+        runProgresses ??
+        (runProgress == null
+            ? this.runProgresses
+            : _progressListFromNullable(runProgress)),
+  );
 }
+
+List<SopRunProgress> _progressListFromNullable(SopRunProgress? progress) =>
+    progress == null ? <SopRunProgress>[] : <SopRunProgress>[progress];
 
 class SopTemplate {
   const SopTemplate({
@@ -115,14 +311,16 @@ class SopTemplate {
   final List<SopStep> steps;
 
   Sop toSop() => Sop(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        title: title,
-        scene: scene,
-        description: description,
-        illustration: illustration,
-        steps: steps.map((s) => SopStep(title: s.title, items: List<String>.from(s.items))).toList(),
-        plazaTemplateId: id,
-      );
+    id: DateTime.now().microsecondsSinceEpoch.toString(),
+    title: title,
+    scene: scene,
+    description: description,
+    illustration: illustration,
+    steps: steps
+        .map((s) => SopStep(title: s.title, items: List<String>.from(s.items)))
+        .toList(),
+    plazaTemplateId: id,
+  );
 }
 
 class LearnArticle {
@@ -167,12 +365,19 @@ class SopStore {
 
   Future<List<Sop>> load() async {
     final prefs = await SharedPreferences.getInstance();
-    final version = prefs.getInt('${_prefsKey}_version') ?? 0;
     final raw = prefs.getString(_prefsKey);
 
-    if (raw != null && version == _dataVersion) {
-      final list = jsonDecode(raw) as List;
-      return list.map((e) => Sop.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+    if (raw != null) {
+      try {
+        final list = jsonDecode(raw) as List;
+        final sops = list
+            .map((e) => Sop.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+        await prefs.setInt('${_prefsKey}_version', _dataVersion);
+        return sops;
+      } catch (_) {
+        // Fall back to seed data only when stored data is unreadable.
+      }
     }
 
     final seeded = _seedSops();
@@ -191,7 +396,8 @@ class SopStore {
 
 List<Sop> _seedSops() {
   final now = DateTime.now();
-  DateTime todayAt(int h, int m) => DateTime(now.year, now.month, now.day, h, m);
+  DateTime todayAt(int h, int m) =>
+      DateTime(now.year, now.month, now.day, h, m);
   return [
     Sop(
       id: 'seed-morning',
